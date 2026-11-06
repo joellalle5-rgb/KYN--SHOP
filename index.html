@@ -4,8 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>KYN--SHOP</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script>
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();window.__dip=e;const b=document.getElementById('bInst');if(b)b.hidden=false});
+addEventListener('appinstalled',()=>{window.__dip=null;const b=document.getElementById('bInst');if(b)b.hidden=true});
+if('serviceWorker' in navigator&&location.protocol.startsWith('http'))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+setTimeout(()=>{const s=document.getElementById('splash');if(s){s.classList.add('out');setTimeout(()=>s.remove(),700)}},5000);
+</script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#f26a1b">
 <meta name="mobile-web-app-capable" content="yes">
@@ -95,17 +101,17 @@ h4{margin:16px 0 6px;font-size:14px;color:var(--mu)}
 </head>
 <body>
 <div id="splash" role="status"><p>Bienvenue sur</p><h2>KYN--SHOP</h2><i></i></div>
-<header class="top"><div><b id="shop">KYN--SHOP</b><small id="today"></small></div><button data-a="settings">Réglages</button></header>
+<header class="top"><div><b id="shop">KYN--SHOP</b><small id="today"></small></div><div style="display:flex;gap:8px"><button id="bInst" data-a="inst" hidden>Installer</button><button data-a="settings">Réglages</button></div></header>
 
 <main class="app">
  <section id="t-ventes">
-  <div class="card hero"><small>Bénéfice du jour</small><div class="big" id="hBen">0 F</div><div class="sub" id="hSub"></div></div>
+  <div class="card hero" data-a="ben" style="cursor:pointer"><small>Bénéfice du jour (encaissé)</small><div class="big" id="hBen">0 F</div><div class="sub" id="hSub"></div><div class="sub" style="margin-top:4px;color:var(--br);font-weight:600">Touchez pour voir le détail ›</div></div>
   <button class="btn pri blk lg" data-a="new" style="margin-bottom:12px">+ Nouvelle vente</button>
   <div class="card">
    <div class="chips" id="chips"></div>
    <div class="dates" id="dts" style="margin-top:10px" hidden><div><label>Du</label><input class="in" type="date" id="pF"></div><div><label>Au</label><input class="in" type="date" id="pT"></div></div>
    <div class="kpis" id="kpis"></div>
-   <button class="btn blk" data-a="releve">Télécharger le relevé (PDF)</button>
+   <div class="dates"><button class="btn" data-a="benper">Détail du bénéfice</button><button class="btn" data-a="releve">Relevé PDF</button></div>
   </div>
   <div id="vList"></div>
  </section>
@@ -163,6 +169,17 @@ const tot=v=>v.lignes.reduce((s,l)=>s+l.pv*l.q,0),ben=v=>v.lignes.reduce((s,l)=>
 const paidV=v=>db.vers.reduce((s,p)=>s+p.alloc.filter(a=>a.vente===v.id).reduce((t,a)=>t+a.m,0),0);
 const reste=v=>tot(v)-v.paye-paidV(v);
 const arts=v=>v.lignes.map(l=>l.nom+(l.q>1?' ×'+l.q:'')).join(', ');
+/* Bénéfice encaissé : le prix d’achat est récupéré en premier, seul l’excédent encaissé est du bénéfice, à la date de chaque paiement */
+function evts(v){
+  const E=[{d:v.date,h:v.h,m:v.paye,num:v.num,k:0,src:'v'}];
+  db.vers.forEach(p=>p.alloc.forEach(a=>{if(a.vente===v.id)E.push({d:p.date,h:p.h,m:a.m,num:p.num,k:p.id,src:'p'})}));
+  E.sort((a,b)=>a.k-b.k);
+  const C=v.lignes.reduce((s,l)=>s+l.pa*l.q,0),T=tot(v);let cum=0;
+  E.forEach(e=>{const av=cum;cum+=e.m;e.b=T<C?e.m*(T-C)/(T||1):Math.max(0,cum-C)-Math.max(0,av-C)});
+  return E;
+}
+const benReal=v=>evts(v).reduce((s,e)=>s+e.b,0),benPend=v=>ben(v)-benReal(v);
+function evIn(a,b){const R=[];db.ventes.forEach(v=>evts(v).forEach(e=>{if(e.m>0&&e.d>=a&&e.d<=b)R.push({v,e})}));return R.sort((x,y)=>y.e.d.localeCompare(x.e.d)||y.e.k-x.e.k||y.v.id-x.v.id)}
 const nextNum=()=>{let m=0;[...db.ventes,...db.vers].forEach(x=>{const n=parseInt(x.num,10);if(n>m)m=n});return pad(m+1)};
 const numTaken=n=>[...db.ventes,...db.vers].some(x=>x.num===n);
 
@@ -189,14 +206,15 @@ const inPer=()=>db.ventes.filter(v=>v.date>=per.from&&v.date<=per.to).sort((a,b)
 
 /* ---------- Onglet Ventes ---------- */
 function rVentes(){
-  const j=db.ventes.filter(v=>v.date===today()),b=j.reduce((s,v)=>s+ben(v),0),cj=j.reduce((s,v)=>s+Math.max(reste(v),0),0);
+  const j=db.ventes.filter(v=>v.date===today()),E0=evIn(today(),today()),b=E0.reduce((s,x)=>s+x.e.b,0),cash=E0.reduce((s,x)=>s+x.e.m,0),cj=j.reduce((s,v)=>s+Math.max(reste(v),0),0);
   $('#hBen').textContent=f(b);$('#hBen').className='big '+cls(b);
-  $('#hSub').textContent=`${j.length} vente${j.length>1?'s':''} · recette ${f(j.reduce((s,v)=>s+tot(v),0))}`+(cj>0?` · crédits ${f(cj)}`:'');
+  $('#hSub').textContent=`${j.length} vente${j.length>1?'s':''} · encaissé ${f(cash)}`+(cj>0?` · crédits du jour ${f(cj)}`:'');
   $('#chips').innerHTML=PERS.map(p=>`<button class="chip ${p[0]===per.k?'on':''}" data-a="per" data-v="${p[0]}">${p[1]}</button>`).join('');
   $('#dts').hidden=per.k!=='perso';$('#pF').value=per.from.startsWith('0000')?'':per.from;$('#pT').value=per.to.startsWith('9999')?'':per.to;
   const r=inPer(),S=g=>r.reduce((s,v)=>s+g(v),0),kp=(a,c)=>`<div class="kpi"><small>${a}</small><b>${c}</b></div>`;
-  $('#kpis').innerHTML=kp('Chiffre d’affaires',f(S(tot)))+kp('Bénéfice',`<span class="${cls(S(ben))}">${f(S(ben))}</span>`)+kp('Nombre de ventes',r.length)+kp('Crédits à recevoir',f(S(v=>Math.max(reste(v),0))));
-  $('#vList').innerHTML=r.length?r.slice(0,200).map(v=>{const rs=reste(v);return `<button class="item" data-a="vente" data-id="${v.id}"><div class="l"><b>${esc(arts(v))}</b><small>N° ${esc(v.num)} · ${fd(v.date)} ${v.h}${v.client?' · '+esc(v.client):''}</small></div><div class="r"><b>${f(tot(v))}</b><small class="${cls(ben(v))}">${ben(v)>=0?'+':''}${f(ben(v))}</small>${rs>0?`<span class="tag bad">Reste ${f(rs)}</span>`:''}</div></button>`}).join(''):'<div class="empty">Aucune vente sur cette période.</div>';
+  const E=evIn(per.from,per.to),bn=E.reduce((s,x)=>s+x.e.b,0);
+  $('#kpis').innerHTML=kp('Chiffre d’affaires',f(S(tot)))+kp('Encaissé',f(E.reduce((s,x)=>s+x.e.m,0)))+kp('Bénéfice encaissé',`<span class="${cls(bn)}">${f(bn)}</span>`)+kp('Crédits à recevoir',f(S(v=>Math.max(reste(v),0))));
+  $('#vList').innerHTML=r.length?r.slice(0,200).map(v=>{const rs=reste(v),br=benReal(v);return `<button class="item" data-a="vente" data-id="${v.id}"><div class="l"><b>${esc(arts(v))}</b><small>N° ${esc(v.num)} · ${fd(v.date)} ${v.h}${v.client?' · '+esc(v.client):''}</small></div><div class="r"><b>${f(tot(v))}</b><small class="${cls(br)}">${br>=0?'+':''}${f(br)}${rs>0.5?' sur '+f(ben(v)):''}</small>${rs>0?`<span class="tag bad">Reste ${f(rs)}</span>`:''}</div></button>`}).join(''):'<div class="empty">Aucune vente sur cette période.</div>';
 }
 
 /* ---------- Nouvelle vente (panier) ---------- */
@@ -240,13 +258,21 @@ function valider(){
 
 /* ---------- Détail d’une vente ---------- */
 function vDetail(id){
-  const v=db.ventes.find(x=>x.id===id),T=tot(v),R=reste(v),P=db.vers.filter(p=>p.alloc.some(a=>a.vente===id));
+  const v=db.ventes.find(x=>x.id===id),T=tot(v),R=reste(v),E=evts(v).filter(e=>e.m>0),br=benReal(v);
   sheet('Vente N° '+v.num,`<p class="sub">${fd(v.date)} à ${v.h}${v.client?' · '+esc(v.client):''}</p>
   <table class="t"><tbody>${v.lignes.map(l=>`<tr><td>${esc(l.nom)} × ${l.q}</td><td class="n">${num(l.pv)}</td><td class="n">${num(l.pv*l.q)}</td></tr>`).join('')}</tbody></table>
-  <div class="tot"><span>Total</span><b>${f(T)}</b></div><p class="sub">Bénéfice : <b class="${cls(ben(v))}">${f(ben(v))}</b></p>
-  <h4>Paiements</h4><table class="t"><tbody><tr><td>${fd(v.date)}</td><td>À l’achat</td><td class="n">${f(v.paye)}</td></tr>${P.map(p=>`<tr><td>${fd(p.date)}</td><td>Versement (reçu N° ${esc(p.num)})</td><td class="n">${f(p.alloc.filter(a=>a.vente===id).reduce((s,a)=>s+a.m,0))}</td></tr>`).join('')}</tbody></table>
-  ${R>0?`<p style="margin-top:10px"><span class="tag bad">Reste à payer : ${f(R)}</span></p>`:'<p style="margin-top:10px"><span class="tag ok">Soldée</span></p>'}
-  <div class="foot"><button class="btn pri blk" data-a="rcv" data-kind="v" data-id="${id}">Voir / imprimer le reçu</button>${R>0?`<button class="btn blk" data-a="enc" data-k="${esc(v.client.toLowerCase())}">Encaisser un versement</button>`:''}<button class="btn dg blk" data-a="xv" data-id="${id}">Annuler cette vente</button></div>`);
+  <div class="tot"><span>Total</span><b>${f(T)}</b></div>
+  <h4>Paiements</h4>${E.length?`<table class="t"><thead><tr><th>Date</th><th></th><th class="n">Reçu</th><th class="n">Bénéfice</th></tr></thead><tbody>${E.map(e=>`<tr><td>${fd(e.d)}</td><td>${e.src==='v'?'À l’achat':'Versement'} · N° ${esc(e.num)}</td><td class="n">${num(e.m)}</td><td class="n ${cls(e.b)}">${num(e.b)}</td></tr>`).join('')}</tbody></table>`:'<p class="sub">Aucun paiement pour le moment.</p>'}
+  <p class="sub" style="margin-top:8px">Bénéfice encaissé : <b class="${cls(br)}">${f(br)}</b> sur ${f(ben(v))}</p>
+  ${R>0.5?`<p><span class="tag bad">Reste à payer : ${f(R)}</span></p>`:'<p><span class="tag ok">Soldée</span></p>'}
+  <div class="foot"><button class="btn pri blk" data-a="rcv" data-kind="v" data-id="${id}">Voir / imprimer le reçu</button>${R>0.5?`<button class="btn blk" data-a="enc" data-k="${esc(v.client.toLowerCase())}">Encaisser un versement</button>`:''}<button class="btn dg blk" data-a="xv" data-id="${id}">Annuler cette vente</button></div>`);
+}
+function openBen(a,b,title){
+  const R=evIn(a,b),B=R.reduce((s,x)=>s+x.e.b,0),M=R.reduce((s,x)=>s+x.e.m,0),pend=db.ventes.filter(v=>reste(v)>0.5).reduce((s,v)=>s+benPend(v),0);
+  sheet(title,`<div class="hero"><small class="sub">Bénéfice encaissé</small><div class="big ${cls(B)}">${f(B)}</div><div class="sub">sur ${f(M)} encaissés</div></div>
+  <p class="note">Une vente à crédit peut être soldée en plusieurs fois : son bénéfice n’est compté qu’au fur et à mesure des paiements. Le prix d’achat est récupéré en premier, le reste est du bénéfice.</p>
+  <h4>Encaissements</h4>${R.length?R.map(({v,e})=>`<button class="item" data-a="vente" data-id="${v.id}"><div class="l"><b>${esc(arts(v))}</b><small>${v.client?esc(v.client)+' · ':''}${fd(e.d)} · ${e.src==='v'?'à l’achat':'versement'} · reçu N° ${esc(e.num)}</small></div><div class="r"><b>${f(e.m)}</b><small class="${cls(e.b)}">dont bénéfice ${f(e.b)}</small></div></button>`).join(''):'<div class="empty">Aucun encaissement sur cette période.</div>'}
+  <h4>À venir</h4><p>Bénéfice en attente sur les crédits en cours : <b>${f(pend)}</b></p>`);
 }
 function annulerVente(id){
   const v=db.ventes.find(x=>x.id===id);
@@ -387,21 +413,31 @@ async function rcShare(){
 }
 function releve(){
   if(!window.jspdf)return toast('PDF indisponible sans connexion.',1);
-  const r=[...inPer()].reverse(),S=g=>r.reduce((s,v)=>s+g(v),0),doc=new window.jspdf.jsPDF({orientation:'landscape'});
-  doc.setFontSize(16);doc.text(db.shop+' - Abengourou',14,16);doc.setFontSize(10);doc.text('Relevé des ventes - '+perLabel()+'   (montants en F CFA)',14,23);
-  doc.autoTable({startY:28,styles:{fontSize:9},headStyles:{fillColor:[242,106,27]},footStyles:{fillColor:[238,240,243],textColor:20},columnStyles:{4:{halign:'right'},5:{halign:'right'},6:{halign:'right'}},
-    head:[['N°','Date','Client','Articles','Total','Bénéfice','Crédit restant']],
-    body:r.map(v=>[v.num,fd(v.date),v.client||'',arts(v),pn(tot(v)),pn(ben(v)),reste(v)>0?pn(reste(v)):'-']),
-    foot:[['','Total','','',pn(S(tot)),pn(S(ben)),pn(S(v=>Math.max(reste(v),0)))]]});
+  const r=[...inPer()].reverse(),E=evIn(per.from,per.to).reverse(),doc=new window.jspdf.jsPDF({orientation:'landscape'}),sm=g=>E.reduce((s,x)=>s+g(x),0);
+  doc.setFontSize(16);doc.text(db.shop+' - Abengourou',14,16);doc.setFontSize(10);doc.text('Relevé - '+perLabel()+'   (montants en F CFA)',14,23);
+  doc.autoTable({startY:28,styles:{fontSize:9},headStyles:{fillColor:[242,106,27]},footStyles:{fillColor:[238,240,243],textColor:20},columnStyles:{4:{halign:'right'},5:{halign:'right'}},
+    head:[['N°','Date','Client','Articles','Total vente','Crédit restant']],
+    body:r.map(v=>[v.num,fd(v.date),v.client||'',arts(v),pn(tot(v)),reste(v)>0.5?pn(reste(v)):'-']),
+    foot:[['','Total','','',pn(r.reduce((s,v)=>s+tot(v),0)),pn(r.reduce((s,v)=>s+Math.max(reste(v),0),0))]]});
+  const y=doc.lastAutoTable.finalY+10;doc.setFontSize(12);doc.text('Encaissements et bénéfice de la période',14,y);
+  doc.autoTable({startY:y+3,styles:{fontSize:9},headStyles:{fillColor:[29,63,159]},footStyles:{fillColor:[238,240,243],textColor:20},columnStyles:{5:{halign:'right'},6:{halign:'right'}},
+    head:[['Date','Reçu N°','Client','Articles','Type','Encaissé','Bénéfice']],
+    body:E.map(({v,e})=>[fd(e.d),e.num,v.client||'',arts(v),e.src==='v'?'À l’achat':'Versement',pn(e.m),pn(e.b)]),
+    foot:[['Total','','','','',pn(sm(x=>x.e.m)),pn(sm(x=>x.e.b))]]});
   doc.save('releve_'+(per.k==='tout'?'complet':per.from+'_'+per.to)+'.pdf');
 }
 
 /* ---------- Réglages et sauvegarde ---------- */
+const VER='2.1';
 function openSet(){
+  const sa=matchMedia('(display-mode: standalone)').matches||navigator.standalone,ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  const inst=sa?'<p class="note">Vous utilisez déjà l’application installée.</p>':window.__dip?'<button class="btn pri blk" data-a="inst">Installer sur ce téléphone</button>':ios?'<p class="note">Sur iPhone : ouvrez cette page dans Safari, touchez Partager, puis « Sur l’écran d’accueil ».</p>':'<p class="note">Dans Chrome : menu ⋮ puis « Installer l’application ». Si cette option n’apparaît pas, l’application est peut-être déjà installée : cherchez l’icône KYN--SHOP sur votre téléphone.</p>';
   sheet('Réglages',`<label>Nom de la boutique</label><input id="rN" class="in" value="${esc(db.shop)}"><label>Téléphone (affiché sur les reçus)</label><input id="rT" class="in" type="tel" value="${esc(db.tel)}">
   <div class="foot"><button class="btn pri blk" data-a="saveSet">Enregistrer</button></div>
+  <h4>Installation</h4>${inst}
   <h4>Sauvegarde</h4><p class="note">Vos données sont enregistrées sur cet appareil. Exportez une sauvegarde chaque semaine et conservez le fichier (WhatsApp, Drive, e-mail).</p>
-  <div class="g3" style="grid-template-columns:1fr 1fr;margin-bottom:8px"><button class="btn" data-a="exp">Exporter</button><button class="btn" data-a="imp">Importer</button></div>`);
+  <div class="g3" style="grid-template-columns:1fr 1fr;margin-bottom:8px"><button class="btn" data-a="exp">Exporter</button><button class="btn" data-a="imp">Importer</button></div>
+  <p class="note" style="text-align:center">Version ${VER}</p>`);
 }
 $('#fImp').onchange=e=>{
   const fl=e.target.files[0];if(!fl)return;const r=new FileReader();
@@ -426,6 +462,8 @@ const A={
   art:b=>openArt(+b.dataset.id),saveArt:b=>saveArt(+b.dataset.id),
   delArt:b=>ask('Supprimer l’article','L’historique des ventes est conservé.','Supprimer',()=>{db.stock=db.stock.filter(x=>x.id!==+b.dataset.id);save();render()}),
   stv:b=>{stv=b.dataset.v;rStock()},settings:openSet,
+  ben:()=>openBen(today(),today(),'Bénéfice du jour'),benper:()=>openBen(per.from,per.to,'Bénéfice · '+perLabel()),
+  inst:()=>{const d=window.__dip;if(!d||!d.prompt)return;d.prompt();d.userChoice.then(()=>{window.__dip=null;$('#bInst').hidden=true;closeSheet()})},
   saveSet:()=>{db.shop=$('#rN').value.trim()||'KYN--SHOP';db.tel=$('#rT').value.trim();save();closeSheet();render();toast('Réglages enregistrés.')},
   exp:()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db)],{type:'application/json'}));a.download='sauvegarde_kyn-shop_'+today()+'.json';a.click()},
   imp:()=>$('#fImp').click()
@@ -452,8 +490,7 @@ function render(){
   rVentes();rCredits();rStock();
 }
 render();
-setTimeout(()=>{const s=$('#splash');s.classList.add('out');setTimeout(()=>s.remove(),700)},5000);
-if('serviceWorker' in navigator&&location.protocol.startsWith('http'))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+if(window.__dip)$('#bInst').hidden=false;
 </script>
 </body>
 </html>
