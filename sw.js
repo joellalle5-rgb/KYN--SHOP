@@ -1,4 +1,4 @@
-const V='kyn-shop-v3',CORE=['./','./index.html','./manifest.json','./fond.jpg','./icon-192.png','./icon-512.png','./apple-touch-icon.png'];
+const V='kyn-shop-v4',CORE=['./','./index.html','./manifest.json','./fond.jpg','./icon-192.png','./icon-512.png','./apple-touch-icon.png'];
 // Installation tolérante : un fichier manquant ne bloque plus le service worker
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>Promise.all(CORE.map(u=>c.add(u).catch(()=>{})))).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==V).map(x=>caches.delete(x)))).then(()=>self.clients.claim()))});
